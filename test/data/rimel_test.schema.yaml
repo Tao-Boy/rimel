@@ -1,0 +1,38 @@
+# A tiny table schema with auto-commit, used by the test suite.
+schema:
+  schema_id: rimel_test
+  name: Rimel Test
+  version: "1"
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - table_translator
+speller:
+  alphabet: abcdefghijklmnopqrstuvwxyz
+  max_code_length: 2
+  auto_select: true
+translator:
+  dictionary: rimel_test
+  enable_sentence: false
+  enable_user_dict: false
+punctuator:
+  import_preset: default
+key_binder:
+  import_preset: default
+recognizer:
+  import_preset: default

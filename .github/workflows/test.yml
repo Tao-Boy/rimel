@@ -1,0 +1,41 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    env:
+      EMACS_VERSION: "31.1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install librime and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y librime-dev rime-data-luna-pinyin \
+            autoconf texinfo libgnutls28-dev libncurses-dev
+
+      - name: Cache Emacs
+        id: cache-emacs
+        uses: actions/cache@v4
+        with:
+          path: ~/emacs
+          key: emacs-${{ env.EMACS_VERSION }}-nox-ubuntu-24.04
+
+      - name: Build Emacs ${{ env.EMACS_VERSION }}
+        if: steps.cache-emacs.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "emacs-$EMACS_VERSION" \
+            https://github.com/emacs-mirror/emacs.git /tmp/emacs-src
+          cd /tmp/emacs-src
+          ./autogen.sh
+          ./configure --prefix="$HOME/emacs" --without-x --with-modules \
+            --without-native-compilation --without-mailutils --without-pop
+          make -j"$(nproc)"
+          make install
+
+      - name: Test
+        run: make test EMACS="$HOME/emacs/bin/emacs"
