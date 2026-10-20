@@ -702,6 +702,9 @@ In an active minibuffer the menu is appended to its contents instead."
 
 (defconst rimel--posframe-buffer " *rimel-posframe*")
 
+(defvar rimel--posframe-last nil
+  "What the posframe shows: (STRING POSITION WINDOW), or nil if hidden.")
+
 (defun rimel--posframe-usable-p ()
   (and (display-graphic-p)
        (require 'posframe nil t)
@@ -712,23 +715,28 @@ In an active minibuffer the menu is appended to its contents instead."
 Falls back to `rimel-show-minibuffer' when posframe is unavailable."
   (cond
    ((null state)
+    (setq rimel--posframe-last nil)
     (when (get-buffer rimel--posframe-buffer)
       (posframe-hide rimel--posframe-buffer))
     (rimel-show-minibuffer nil))
    ((or input-method-use-echo-area (not (rimel--posframe-usable-p)))
     (rimel-show-minibuffer state))
    (t
-    (let ((face-bg (face-background 'rimel-posframe-face nil t))
-          (face-fg (face-foreground 'rimel-posframe-face nil t)))
-      (apply #'posframe-show rimel--posframe-buffer
-             :string (rimel-format-candidates state rimel-candidate-layout
-                                              (not rimel-inline-preedit))
-             :position (point)
-             :background-color face-bg
-             :foreground-color face-fg
-             :internal-border-color
-             (face-foreground 'rimel-posframe-border-face nil t)
-             rimel-posframe-properties)))))
+    (let* ((string (rimel-format-candidates state rimel-candidate-layout
+                                            (not rimel-inline-preedit)))
+           (shown (list string (point) (selected-window))))
+      ;; `posframe-show' costs a couple of milliseconds; skip it when
+      ;; the key did not change the menu (e.g. caret moves).
+      (unless (equal-including-properties shown rimel--posframe-last)
+        (apply #'posframe-show rimel--posframe-buffer
+               :string string
+               :position (point)
+               :background-color (face-background 'rimel-posframe-face nil t)
+               :foreground-color (face-foreground 'rimel-posframe-face nil t)
+               :internal-border-color
+               (face-foreground 'rimel-posframe-border-face nil t)
+               rimel-posframe-properties)
+        (setq rimel--posframe-last shown))))))
 
 (defun rimel--candidate-function ()
   (pcase rimel-candidate-style

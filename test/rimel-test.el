@@ -438,8 +438,13 @@ terminal, as it does for any input method."
         (should (= (plist-get (cdr shown) :internal-border-width) 3))
         (should (string-match-p "\\`1\\.你\n2\\."
                                 (plist-get (cdr shown) :string)))
+        ;; An unchanged menu is not redrawn.
+        (setq shown nil)
+        (rimel-show-posframe (rimel-module-state))
+        (should-not shown)
         (rimel-show-posframe nil)
         (should (equal hidden rimel--posframe-buffer))
+        (should-not rimel--posframe-last)
         (rimel-module-clear-composition)))))
 
 (ert-deftest rimel-test-echo-area-mode ()

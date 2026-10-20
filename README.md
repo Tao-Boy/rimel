@@ -198,10 +198,18 @@ librime 维护线程（部署/编译词库/同步） ─▶ 非阻塞管道（op
 
 - **一次往返**：`rimel-module-process-key` 送入按键后，在同一次 C 调用中取回提交文字、预编辑、光标、候选页、标签、西文模式等，打包成一个向量返回。UTF-8 字节偏移也在 C 里换算成字符下标。
 - **后台部署**：`rimel-module-start` 调用 librime 的 `start_maintenance` 后立即返回（实测约 13 ms），部署在 librime 线程中完成。librime 的通知回调可能来自任意线程，回调里只做一次 `write(2)`，写入 `open_channel` 取得的非阻塞管道，**从不在主线程之外调用 Emacs API**。维护期间所有入口立即返回 nil，按键按原样插入。
-- **渲染节流**：处理按键后如果还有待读输入（`input-pending-p`），就跳过候选框渲染，快速连续输入时不会被 posframe 拖慢。
+- **渲染节流**：处理按键后如果还有待读输入（`input-pending-p`），就跳过候选框渲染，快速连续输入时不会被 posframe 拖慢。候选内容和位置都没变时（例如在编码中移动光标），不再调用 `posframe-show`。
 - **顶字上屏**：遇到“上屏的同时留下新组字”的情况（如五笔顶字），先把上屏文字交还命令循环，剩余编码以 `(no-record . KEY)` 重新送入输入法。这样键盘宏不会重复记录，探针也不会打断。
 
-性能（本机，Emacs 31.1 + librime 1.10，luna_pinyin）：模块内单键处理加取状态约 **37 µs**；经过完整命令循环（`read_char` → 输入法 → `self-insert-command`）约 **150 µs/键**。
+性能（Emacs 31.1 + librime 1.10，luna_pinyin，Linux x86-64）：
+
+| 项目 | 耗时 |
+| --- | --- |
+| 模块内处理一个按键并取回完整状态 | 约 40–55 µs |
+| 经过完整命令循环（`read_char` → 输入法 → `self-insert-command`） | 约 150 µs/键 |
+| 预编辑 overlay 更新加一次重绘（GTK3 图形界面） | 约 90–150 µs |
+| `posframe-show` 加一次重绘（GTK3 图形界面） | 约 1.8 ms |
+| `rimel-module-start`（部署在后台进行） | 约 13 ms |
 
 ## 测试
 
