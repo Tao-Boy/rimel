@@ -26,15 +26,45 @@
 
 ## 安装
 
+> **注意重名**：MELPA 上已经有一个同名但完全不同的包 `rimel`（[emacs-rime/rimel](https://github.com/emacs-rime/rimel)）。一句普通的 `(use-package rimel)`，配合 `:ensure t` 或 `use-package-always-ensure`，装到的会是那个包。安装本项目时，必须明确告诉 use-package 从这个仓库安装，或者不要让它去包仓库下载。
+
+### use-package + `:vc`（Emacs 30+）
+
 ```elisp
-;; use-package + vc（Emacs 30+）
 (use-package rimel
   :vc (:url "https://github.com/Tao-Boy/rimel" :rev :newest)
   :custom
   (default-input-method "rimel"))
 ```
 
-或者手动：
+有 `:vc` 时 use-package 不会再执行 `:ensure`，即使设置了 `use-package-always-ensure` 也不会去 MELPA 下载。以后 `package-upgrade-all` 也不会用 MELPA 的同名包替换它。
+
+**如果之前已经装过 MELPA 的 `rimel`**，`:vc` 发现已有同名包就会直接跳过，继续使用那个包。先删掉它再重启 Emacs：
+
+```
+M-x package-delete RET rimel-<版本号> RET
+```
+
+（或者直接删除 `~/.emacs.d/elpa/rimel-<版本号>/` 目录。`elpa/rimel/` 不带版本号，是 `:vc` 安装的本项目。）
+
+### Emacs 29
+
+Emacs 29 的 use-package 还没有 `:vc`，先手动安装一次：
+
+```
+M-x package-vc-install RET https://github.com/Tao-Boy/rimel RET
+```
+
+然后用 `:ensure nil` 阻止 use-package 去包仓库下载：
+
+```elisp
+(use-package rimel
+  :ensure nil
+  :custom
+  (default-input-method "rimel"))
+```
+
+### 手动 clone
 
 ```sh
 git clone https://github.com/Tao-Boy/rimel ~/.emacs.d/site-lisp/rimel
@@ -42,9 +72,36 @@ cd ~/.emacs.d/site-lisp/rimel && make
 ```
 
 ```elisp
-(add-to-list 'load-path "~/.emacs.d/site-lisp/rimel")
-(require 'rimel)
-(setq default-input-method "rimel")
+(use-package rimel
+  :ensure nil                                ; 不从包仓库下载
+  :load-path "~/.emacs.d/site-lisp/rimel"
+  :custom
+  (default-input-method "rimel"))
+```
+
+（有 `:load-path` 时 `use-package-always-ensure` 不生效，但写上 `:ensure nil` 更明确。不用 use-package 的话：`(add-to-list 'load-path "~/.emacs.d/site-lisp/rimel")`，再 `(require 'rimel)`。）
+
+### straight.el / elpaca
+
+这两者默认按包名去找 MELPA 的配方，同样会拿到同名的那个包。需要显式写出配方，并且把 C 源码和 Makefile 也包含进来，否则无法编译模块：
+
+```elisp
+;; straight.el
+(use-package rimel
+  :straight (:host github :repo "Tao-Boy/rimel"
+             :files ("*.el" "rimel-module.c" "Makefile")))
+
+;; elpaca
+(use-package rimel
+  :ensure (:host github :repo "Tao-Boy/rimel"
+           :files ("*.el" "rimel-module.c" "Makefile")))
+```
+
+### 确认装对了
+
+```elisp
+(locate-library "rimel")   ; 应指向本仓库的 rimel.el
+(fboundp 'rimel-compile-module)   ; 本项目才有，应为 t
 ```
 
 首次激活时，如果模块还没编译，rimel 会询问是否编译。编译通过 `make` 在后台进程中完成，不会卡住 Emacs。也可以随时 `M-x rimel-compile-module`。
@@ -58,6 +115,25 @@ make LIBRIME_ROOT=/opt/librime         # 使用安装在某前缀下的 librime
 ```
 
 对应的 Elisp 变量是 `rimel-emacs-module-header-root` 和 `rimel-librime-root`。
+
+### Nix / NixOS
+
+**推荐做法：把 librime（和方案数据）也用 Nix 安装**，与 Nix 的 Emacs 配套：
+
+```sh
+nix profile install nixpkgs#librime nixpkgs#rime-data
+# 或 nix-env -iA nixpkgs.librime nixpkgs.rime-data
+# 或写进 home-manager 的 home.packages / NixOS 的 users.users.<名字>.packages
+```
+
+然后执行 `M-x rimel-compile-module`（或 `make`）。Makefile 按以下顺序查找 Nix profile 里的 librime：`~/.nix-profile`、`~/.local/state/nix/profile`、`/etc/profiles/per-user/$USER`、`/run/current-system/sw`。找到后，模块的 rpath 指向 profile 路径，不指向 store 路径：只要 librime 还装在 profile 里，它就不会被 GC，升级之后也会自动用上新版本。方案数据会从同样这些 profile 下的 `share/rime-data` 中找到。
+
+需要注意：
+
+- **不要混用发行版的 librime 和 Nix 的 Emacs。** Nix 的动态链接器不搜索 `/usr/lib`；就算加了 rpath，librime 依赖的 `libglog`、`libstdc++` 等也找不到或互不兼容。因此 Emacs 来自 Nix 时，Makefile 不会使用 pkg-config 或 `/usr/include` 找到的 librime。
+- **Nix profile 里没有 librime 时**，Makefile 会自己构建一份：`nix-build '<nixpkgs>' -A librime -o .nix-librime`，没有 `NIX_PATH` 时改用 `nix build nixpkgs#librime`。`.nix-librime` 链接是 GC root。NixOS 上 pkg-config 和编译器都找不到 librime 时，也走这条路。方案数据同理：哪里都找不到时，会在后台执行 `make nix-rime-data`。
+- **换了 librime 之后**，执行 `M-x rimel-compile-module`（总会重新链接），然后重启 Emacs，因为已经加载的模块无法替换。`make distclean` 会删除模块和 `.nix-*` 链接。
+- 想用别的 librime，可以 `(setq rimel-librime-root "/path/to/librime")` 或 `make LIBRIME_ROOT=...`，这样设置优先于以上所有规则。
 
 ## 使用
 
