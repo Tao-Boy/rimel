@@ -106,6 +106,10 @@
 When nil the system librime is used, located with pkg-config."
   :type '(choice (const :tag "System" nil) directory))
 
+(defun rimel--nix-rime-data-dir ()
+  "Schema data fetched by `make nix-rime-data' (see `rimel--ensure-started')."
+  (expand-file-name ".nix-rime-data/share/rime-data" rimel--root))
+
 (defun rimel--default-shared-data-dir ()
   "Return the first existing Rime shared data directory."
   (cl-find-if
@@ -113,9 +117,12 @@ When nil the system librime is used, located with pkg-config."
    (list "/usr/share/rime-data"
          "/usr/local/share/rime-data"
          "/run/current-system/sw/share/rime-data"
+         (format "/etc/profiles/per-user/%s/share/rime-data" (user-login-name))
+         (expand-file-name "~/.nix-profile/share/rime-data")
+         (expand-file-name "~/.local/state/nix/profile/share/rime-data")
+         (rimel--nix-rime-data-dir)
          "/opt/homebrew/share/rime-data"
          "/Library/Input Methods/Squirrel.app/Contents/SharedSupport"
-         (expand-file-name "~/.nix-profile/share/rime-data")
          "/usr/share/rime/data")))
 
 (defcustom rimel-shared-data-dir (rimel--default-shared-data-dir)
@@ -294,29 +301,19 @@ changes.  The hook only reads state; it never inserts text."
              (expand-file-name "src" source-directory)
              "/usr/include" "/usr/local/include" "/opt/homebrew/include"))))
 
-;;;###autoload
-(defun rimel-compile-module (&optional callback)
-  "Build the dynamic module in the background with make.
-CALLBACK, if non-nil, is called with no argument once the module is
-built and loaded."
-  (interactive)
+(defun rimel--run-make (args what on-success)
+  "Run make with ARGS in the background in the package directory.
+WHAT describes the job for messages.  ON-SUCCESS is called with no
+argument if make succeeds; on failure its output is displayed."
   (when (process-live-p rimel--compile-process)
-    (user-error "Rimel: the module is already being built"))
-  (let* ((default-directory rimel--root)
-         (include (rimel--emacs-include-dir))
-         (buffer (get-buffer-create "*rimel-compile*"))
-         (command (append
-                   (list "make" "module"
-                         (concat "MODULE=" (file-name-nondirectory
-                                            rimel-module-file)))
-                   (when include (list (concat "EMACS_INCLUDE_DIR=" include)))
-                   (when rimel-librime-root
-                     (list (concat "LIBRIME_ROOT="
-                                   (expand-file-name rimel-librime-root)))))))
+    (user-error "Rimel: a build is already running"))
+  (let ((default-directory rimel--root)
+        (buffer (get-buffer-create "*rimel-compile*"))
+        (command (cons "make" args)))
     (with-current-buffer buffer
       (let ((inhibit-read-only t)) (erase-buffer))
       (insert (string-join command " ") "\n"))
-    (message "Rimel: building the module...")
+    (message "Rimel: %s..." what)
     (setq rimel--compile-process
           (make-process
            :name "rimel-compile" :buffer buffer :command command
@@ -325,13 +322,41 @@ built and loaded."
            (lambda (proc _event)
              (when (memq (process-status proc) '(exit signal))
                (if (and (eq (process-status proc) 'exit)
-                        (zerop (process-exit-status proc))
-                        (rimel--load-module))
-                   (progn (message "Rimel: module built")
-                          (when callback (funcall callback)))
+                        (zerop (process-exit-status proc)))
+                   (funcall on-success)
                  (display-buffer (process-buffer proc))
-                 (message "Rimel: building the module failed, see %s"
-                          (buffer-name (process-buffer proc))))))))))
+                 (message "Rimel: %s failed, see %s"
+                          what (buffer-name (process-buffer proc))))))))))
+
+;;;###autoload
+(defun rimel-compile-module (&optional callback)
+  "Build the dynamic module in the background with make.
+CALLBACK, if non-nil, is called with no argument once the module is
+built and loaded.  On Nix systems without librime in the build
+environment, make builds librime with Nix first (see the Makefile)."
+  (interactive)
+  (let ((include (rimel--emacs-include-dir)))
+    (rimel--run-make
+     (append (list "module" (concat "MODULE=" (file-name-nondirectory
+                                               rimel-module-file)))
+             (when include (list (concat "EMACS_INCLUDE_DIR=" include)))
+             (when rimel-librime-root
+               (list (concat "LIBRIME_ROOT="
+                             (expand-file-name rimel-librime-root)))))
+     "building the module"
+     (lambda ()
+       (if (not (rimel--load-module))
+           (message "Rimel: the module was built but cannot be loaded")
+         (message "Rimel: module built")
+         (when callback (funcall callback)))))))
+
+(defun rimel--fetch-rime-data (callback)
+  "Fetch Rime schema data with Nix in the background, then call CALLBACK."
+  (rimel--run-make
+   '("nix-rime-data") "fetching Rime schema data with Nix"
+   (lambda ()
+     (setq rimel-shared-data-dir (rimel--nix-rime-data-dir))
+     (funcall callback))))
 
 ;;;; Lifecycle
 
@@ -414,13 +439,19 @@ built and loaded."
   (setq rimel--notify-process nil))
 
 (defun rimel--ensure-started ()
-  "Load the module (building it if needed) and start librime."
+  "Load the module (building it if needed) and start librime.
+Without schema data on a Nix system, fetch `rime-data' first.  Both
+steps run in the background."
   (cond
-   ((rimel--load-module) (rimel--start))
    ((process-live-p rimel--compile-process))
-   ((or noninteractive
-        (y-or-n-p "Rimel: the native module is not built.  Build it now? "))
-    (rimel-compile-module #'rimel--start))))
+   ((not (rimel--load-module))
+    (when (or noninteractive
+              (y-or-n-p "Rimel: the native module is not built.  Build it now? "))
+      (rimel-compile-module #'rimel--ensure-started)))
+   ((and (not rimel-shared-data-dir)
+         (or (executable-find "nix-build") (executable-find "nix")))
+    (rimel--fetch-rime-data #'rimel--start))
+   (t (rimel--start))))
 
 (defun rimel-ready-p ()
   "Return non-nil if Rime can process keys right now."

@@ -116,6 +116,19 @@ make LIBRIME_ROOT=/opt/librime         # 使用安装在某前缀下的 librime
 
 对应的 Elisp 变量是 `rimel-emacs-module-header-root` 和 `rimel-librime-root`。
 
+### Nix / NixOS
+
+Makefile 会自动处理下面两种情况，`M-x rimel-compile-module` 和直接 `make` 都一样：
+
+- **Emacs 来自 Nix**（例如 Debian + Nix 装的 Emacs）：发行版的 librime 加载不进 Nix 的 Emacs 进程。Nix 的动态链接器不搜索 `/usr/lib`，就算加了 rpath，`libglog`、`libstdc++` 等依赖也找不到或互不兼容。这时即使 apt 装了 librime-dev，也会改用 Nix 的 librime。
+- **NixOS**：没有全局的 `/usr/include`，pkg-config 和编译器都找不到 librime。
+
+以上两种情况都会执行 `nix-build '<nixpkgs>' -A librime -o .nix-librime`；如果 `NIX_PATH` 里没有 nixpkgs，就改用 flake：`nix build nixpkgs#librime`。生成的 `.nix-librime` 链接是一个 GC root，模块的 rpath 也指向它，所以 `nix-collect-garbage` 不会删掉模块要用的 librime。（相比之下，`nix-shell -p librime` 或 `--no-out-link` 拿到的路径没有 GC root，清理之后模块就加载不了了。）`make distclean` 会删除这些链接。
+
+方案数据（`rime-data`）只是 YAML 和词典，与 librime 版本无关，所以 apt 装的 `/usr/share/rime-data` 可以直接用。rimel 也会查找 `/run/current-system/sw`、`/etc/profiles/per-user/$USER`、`~/.nix-profile`、`~/.local/state/nix/profile` 下的 `share/rime-data`。哪里都找不到、但系统里有 Nix 时，激活输入法会在后台执行 `make nix-rime-data`（链接为 `.nix-rime-data`）。
+
+想用别的 librime，可以显式指定：`(setq rimel-librime-root "/nix/store/...-librime-1.x")`，或者 `make LIBRIME_ROOT=...`。
+
 ## 使用
 
 `C-\`（`toggle-input-method`）开关输入法。组字期间：

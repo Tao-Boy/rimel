@@ -3,3 +3,5 @@
 *.elc
 /test/tmp/
 *-autoloads.el
+/.nix-librime
+/.nix-rime-data
