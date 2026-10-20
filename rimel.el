@@ -332,23 +332,31 @@ argument if make succeeds; on failure its output is displayed."
 (defun rimel-compile-module (&optional callback)
   "Build the dynamic module in the background with make.
 CALLBACK, if non-nil, is called with no argument once the module is
-built and loaded.  On Nix systems without librime in the build
-environment, make builds librime with Nix first (see the Makefile)."
+built and loaded.  The module is always relinked, so this also picks
+up a newly installed librime.  For an Emacs from Nix, or on NixOS,
+make uses a Nix librime (see the Makefile)."
   (interactive)
-  (let ((include (rimel--emacs-include-dir)))
+  (let ((include (rimel--emacs-include-dir))
+        (was-loaded (rimel--module-loaded-p)))
     (rimel--run-make
-     (append (list "module" (concat "MODULE=" (file-name-nondirectory
-                                               rimel-module-file)))
+     ;; -W: rebuild even when the module looks up to date.
+     (append (list "-W" "rimel-module.c" "module"
+                   (concat "MODULE=" (file-name-nondirectory
+                                      rimel-module-file)))
              (when include (list (concat "EMACS_INCLUDE_DIR=" include)))
              (when rimel-librime-root
                (list (concat "LIBRIME_ROOT="
                              (expand-file-name rimel-librime-root)))))
      "building the module"
      (lambda ()
-       (if (not (rimel--load-module))
-           (message "Rimel: the module was built but cannot be loaded")
+       (cond
+        (was-loaded
+         (message "Rimel: module rebuilt; restart Emacs to load it"))
+        ((not (rimel--load-module))
+         (message "Rimel: the module was built but cannot be loaded"))
+        (t
          (message "Rimel: module built")
-         (when callback (funcall callback)))))))
+         (when callback (funcall callback))))))))
 
 (defun rimel--fetch-rime-data (callback)
   "Fetch Rime schema data with Nix in the background, then call CALLBACK."

@@ -7,11 +7,13 @@
 #   make test                    byte-compile and run the ERT suite
 #
 # librime is located with pkg-config, then the compiler's default paths.
-# With Nix, librime is instead built into the out-link .nix-librime (a GC
-# root; the module's rpath points through it) when
-#  - Emacs comes from the Nix store: a distribution's librime (and its
-#    libstdc++, boost, glog...) cannot be loaded into a Nix process, or
-#  - neither of the above finds librime (NixOS has no global paths).
+# An Emacs from the Nix store cannot load a distribution's librime (nor
+# its libstdc++, boost, glog...), so for it, and on NixOS where neither
+# finds anything, a Nix librime is used instead:
+#  1. one installed in a Nix profile (nix profile / nix-env / home-manager
+#     / NixOS), linked with an rpath through the profile, which keeps it
+#     alive and follows upgrades;
+#  2. else one built into the out-link .nix-librime (a GC root).
 
 EMACS ?= emacs
 CC ?= cc
@@ -44,10 +46,16 @@ nix_build = nix-build '<nixpkgs>' -A $(1) -o $(2) \
 
 HAVE_NIX := $(shell command -v nix-build || command -v nix)
 NIX_EMACS := $(filter /nix/store/%,$(EMACS_INCLUDE_DIR))
+NIX_PROFILES := $(HOME)/.nix-profile $(HOME)/.local/state/nix/profile \
+  /etc/profiles/per-user/$(shell id -un) /run/current-system/sw
+NIX_PROFILE_LIBRIME := $(firstword $(foreach p,$(NIX_PROFILES),\
+  $(if $(wildcard $(p)/include/rime_api.h),$(p))))
+NIX_LIBRIME_FOUND := $(or $(NIX_PROFILE_LIBRIME),\
+  $(if $(wildcard $(NIX_LIBRIME)/include/rime_api.h),$(NIX_LIBRIME)))
 
 ifndef LIBRIME_ROOT
-  ifneq ($(wildcard $(NIX_LIBRIME)/include/rime_api.h),)
-    LIBRIME_ROOT := $(NIX_LIBRIME)
+  ifneq ($(and $(NIX_EMACS),$(NIX_LIBRIME_FOUND)),)
+    LIBRIME_ROOT := $(NIX_LIBRIME_FOUND)
   else ifneq ($(and $(NIX_EMACS),$(HAVE_NIX)),)
     LIBRIME_ROOT := $(NIX_LIBRIME)
     RIME_DEPS := $(NIX_LIBRIME)
@@ -59,6 +67,8 @@ ifndef LIBRIME_ROOT
   else ifeq ($(shell printf '\043include <rime_api.h>\n' \
                 | $(CC) -E -x c - >/dev/null 2>&1 && echo yes),yes)
     RIME_LIBS := -lrime
+  else ifneq ($(NIX_LIBRIME_FOUND),)
+    LIBRIME_ROOT := $(NIX_LIBRIME_FOUND)
   else ifneq ($(HAVE_NIX),)
     LIBRIME_ROOT := $(NIX_LIBRIME)
     RIME_DEPS := $(NIX_LIBRIME)
@@ -85,9 +95,10 @@ module: $(MODULE)
 $(MODULE): rimel-module.c $(RIME_DEPS)
 	$(if $(RIME_MISSING),$(error librime not found (rime_api.h). Install \
 	  librime's development files, or run make LIBRIME_ROOT=<librime prefix>))
-	$(if $(and $(NIX_EMACS),$(if $(HAVE_NIX),,x)),$(warning Emacs is from \
-	  the Nix store but nix is not on PATH: a system librime will likely \
-	  fail to load; pass LIBRIME_ROOT=<Nix librime>))
+	$(if $(and $(NIX_EMACS),$(if $(LIBRIME_ROOT),,x)),$(warning Emacs is \
+	  from the Nix store but no Nix librime was found: the system librime \
+	  will likely fail to load; install librime with Nix or pass \
+	  LIBRIME_ROOT=<Nix librime>))
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SHARED_FLAGS) -o $@ $< $(LDFLAGS) $(RIME_LIBS)
 
 $(NIX_LIBRIME):
